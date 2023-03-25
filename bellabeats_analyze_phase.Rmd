@@ -1,0 +1,294 @@
+---
+title: "bellabeats_analyze_phase"
+author: "Joel Torres"
+date: "2023-03-18"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+
+<h1>Analyze Phase</h1>
+<h2>Using SQL to analyze</h2>
+ ```
+-- Check to see which column names are shared across tables
+ SELECT column_name,
+  COUNT(table_name)
+FROM `bellabeats-v001.fitbit_users.INFORMATION_SCHEMA.COLUMNS` 
+GROUP BY 1
+LIMIT 1000 
+```
+For every table we check if a column has a name of "Id" if so then give it a 1 else it's 0. This gives me a list of tables with a column of 1 next to it signifying it found a match. All of our data tables have an Id column like needed.
+
+We found that Id was a common column, let's make sure that it is in every table we --have
+```
+SELECT
+ table_name,
+ SUM(CASE
+     WHEN column_name = "Id" THEN 1
+     
+   ELSE
+   0
+ END
+   ) AS has_id_column
+FROM
+ `bellabeats-v001.fitbit_users.INFORMATION_SCHEMA.COLUMNS`
+GROUP BY
+ 1
+ORDER BY
+ 1 ASC;
+```
+
+
+Next, I checked what date data type I had for all tables by using
+
+```
+SELECT
+ table_name,
+ SUM(CASE
+     WHEN data_type IN ("DATE") THEN 1
+     WHEN data_type IN ("DATETIME") THEN 2
+     WHEN data_type IN ("TIME") THEN 3
+     WHEN data_type IN ("TIMESTAMP") THEN 4
+   ELSE
+   1
+ END
+   ) AS has_time_info
+FROM
+ `bellabeats-v001.fitbit_users.INFORMATION_SCHEMA.COLUMNS`
+WHERE
+ data_type IN ("TIMESTAMP",
+   "DATE",
+   "DATETIME",
+   "TIME")
+GROUP BY
+ 1
+HAVING
+ has_time_info = 1;
+```
+
+After, checking for "DATE" type we find that all tables use this data date type.
+But this can be time consuming or is inefficient. It's best to check for all date data types that should not be in the data set at once. We know that we want and should have the "DATE" data type and so we do not check for this but we do for all others against data set. If our return is no data to display then we got what we wanted which was no data types that were in our WHERE selection clause.
+
+
+```
+SELECT
+ table_name,
+ SUM(CASE
+     WHEN data_type IN ("DATE") THEN 1
+     WHEN data_type IN ("DATETIME") THEN 1
+     WHEN data_type IN ("TIME") THEN 1
+     WHEN data_type IN ("TIMESTAMP") THEN 1
+   ELSE
+   0
+ END
+   ) AS has_time_info
+FROM
+ `bellabeats-v001.fitbit_users.INFORMATION_SCHEMA.COLUMNS`
+WHERE
+ data_type IN ("TIMESTAMP",
+   "DATETIME",
+   "TIME")
+GROUP BY
+ 1
+HAVING
+ has_time_info = 1;
+```
+
+-- If we found that we have columns of the type DATETIME, TIMESTAMP, or DATE we can use this query to check for their names
+
+```
+SELECT
+ CONCAT(table_catalog,".",table_schema,".",table_name) AS table_path,
+ table_name,
+ column_name
+FROM
+ `data_analytics_cert.fitbit.INFORMATION_SCHEMA.COLUMNS`
+WHERE
+ data_type IN ("TIMESTAMP",
+   "DATETIME",
+   "DATE");
+
+```
+
+However, since we found no other data types besides "Date" then we could run same sql code for the table_path, table_name, and column_name where "Date" data type is found.
+
+```
+SELECT
+ CONCAT(table_catalog,".",table_schema,".",table_name) AS table_path,
+ table_name,
+ column_name
+FROM
+ `bellabeats-v001.fitbit_users.INFORMATION_SCHEMA.COLUMNS`
+WHERE
+ data_type IN (
+   "DATE");
+```
+I realized in order to do the the analyzes for the number of naps and time slept for those naps then I needed to upload the minuteSleep_merged data set with a timestamp date format which I haven't been able to do. I did learn how to do it via Excel however for files that are too large for Excel to open it would be great to do same task but in RStudio(Posit). Afterward, once data is transformed in R then I could upload onto BigQuery and analyze there.
+
+First thing I will do is to read in the file into RStudio. The date data set is in a format not readable by BigQuery which I'll have to change.
+
+```
+-- RStudio
+minuteSleep_merged <- read.csv(file.path(fitbit_folder, "minuteSleep_merged.csv"))
+
+```
+
+Next, do a vector with correct timestamp format for BigQuery upload. With the UTC added afterward.
+```--{r}
+--RStudio
+minuteSleep_merged_utc <- as.POSIXct(minuteSleep_merged$date, format="%m/%d/%Y %H:%M:%S")
+
+attr(minuteSleep_merged_utc, "tzone") <- "UTC"
+
+head(minuteSleep_merged_utc)
+```
+
+This creates a vector that I can use to replace the other date column.
+```--{r}
+--RStudio
+minuteSleep_merged <- replace(minuteSleep_merged, 2, minuteSleep_merged_utc)
+
+head(minuteSleep_merged)
+```
+
+Next write csv and upload to bigquery
+```--{r}
+--RStudio
+write.csv(minuteSleep_merged, file.path(fitbit_bb_folder, "minuteSleep_merged.csv"), row.names = FALSE)
+```
+I now have a data table in bigquery with a date timestamp that will allow me to analyze data with the following sql code.
+
+```
+--SQL
+DECLARE
+ TIMESTAMP_REGEX STRING DEFAULT r'^\d{4}-\d{1,2}-\d{1,2}[T ]\d{1,2}:\d{1,2}:\d{1,2}(\.\d{1,6})? *(([+-]\d{1,2}(:\d{1,2})?)|Z|UTC)?$'/*;
+DECLARE
+ DATE_REGEX STRING DEFAULT r'^\d{4}-(?:[1-9]|0[1-9]|1[012])-(?:[1-9]|0[1-9]|[12][0-9]|3[01])$';
+DECLARE
+ TIME_REGEX STRING DEFAULT r'^\d{1,2}:\d{1,2}:\d{1,2}(\.\d{1,6})?$';
+ -- Setting variables for time of day/ day of week analyses
+DECLARE
+ MORNING_START,
+ MORNING_END,
+ AFTERNOON_END,
+ EVENING_END INT64;
+ -- Set the times for the times of the day
+SET
+ MORNING_START = 6;
+SET
+ MORNING_END = 12;
+SET
+ AFTERNOON_END = 18;
+SET
+ EVENING_END = 21;
+
+
+SELECT
+ Id,
+ sleep_start AS sleep_date,
+ COUNT(logId) AS number_naps,
+ SUM(EXTRACT(HOUR
+   FROM
+     time_sleeping)) AS total_time_sleeping
+FROM (
+ SELECT
+   Id,
+   logId,
+   MIN(DATE(date)) AS sleep_start,
+   MAX(DATE(date)) AS sleep_end,
+   TIME( TIMESTAMP_DIFF(MAX(date),MIN(date),HOUR),
+     MOD(TIMESTAMP_DIFF(MAX(date),MIN(date),MINUTE),60),
+     MOD(MOD(TIMESTAMP_DIFF(MAX(date),MIN(date),SECOND),3600),60) ) AS time_sleeping
+ FROM
+   `bellabeats-v001.fitbit_users.minuteSleep_merged`
+ WHERE
+   value=1
+ GROUP BY
+   1,
+   2)
+WHERE
+ sleep_start=sleep_end
+GROUP BY
+ 1,
+ 2
+ORDER BY
+ 3 DESC;
+```
+
+Analysis Section:
+SQL analysis
+
+## Table to analyze: fit_level_on_steps
+
+This table is grouped by individual users by Id and I know the number of days of each fitbit user. The number of fitbit users is 33 and the range of number of number of entries for steps counted range from 4 to 31 occurences. I want to analyze the avg_steps_pday column as this measures on average how many steps they take per day for the month depending on how many entries were recorded on the fitbit. The steps per day metric can give us insights as to how fit the fitbit user is. 
+
+They used data on physical activity collected by a national health survey, the National Health and Nutrition Examination Survey (NHANES), between 2003-2006. The study was published on March 24, 2020, in JAMA.
+
+In their analysis, the researchers compared the risk of death over the follow-up period among people who took fewer than 4,000, up to 8,000, or 12,000 or more steps a day. They also tested whether step intensity, measured by cadence, was associated with better health.
+
+During the decade of follow-up, 1,165 out of the 4,840 participants died from any cause. Of these, 406 died from heart disease and 283 died of cancer.
+
+Compared with people who took 4,000 steps a day, those who took 8,000 steps a day at the start of the study had a 50% lower risk of dying from any cause during follow-up. People who took 12,000 steps a day had a 65% lower risk of dying than those who took only 4,000.
+
+Taking 4,000 or fewer steps a day is considered a low level of physical activity.
+
+Of the 33 fitbit users whose data I have for footsteps 9%, 3 total, of them are over the 12k step count which has the most health benefits of a 65% lower risk of dying compared to 4k steps. The next group of fitbit users 33% of them, 11 total, were those between 12k and 8k steps and they benefit with a 50% lower risk of dying. Then we have 39% of users, 13 total, who average between 4k and 7999 and while they dont have the same health benefits as the others there are some. The next group of 18%, 6 total, is considered to be low level physical activity.
+
+*put table of the 6 (18%) low level physical activity in steps
+
+![fitness level by avg steps](fitness_level_avg_steps.png)
+
+## Table to analyze:heartrate_avg_month
+
+The ideal heart rate for a healthy heart is 50-70 beats per minute (bpm) according to some medical practitioners. The other bpm range can be considered satisfactory and not dangerous at the moment however it does put you at risk for future heart health concerns. Our range from the most ideal 67.7 to at risk 96.3 took into account 14 fitbit users. Our data showed we had 3 users in the ideal 50-70 bpm range, acceptable range of 71-80 had another 3 users, and finally the most at risk group for future heart conditions was the above 80 group which had 8 total users. Two of the those users at risk were in the 90 bpm range putting them at an even higher risk. 
+
+*put table of the 8 fitbit users at a higher risk for cardiac health concerns based on heart rate.
+![heart rate avg for the month](hr_avg_month.png)
+
+## Table to analyze:sleep_avg_hrs_month
+
+In this data set about sleep I looked to see if I would see any signs of inefficient sleep. Using the hours asleep column and the hours in bed column I got the respective average for each for the month and calculated their average percent asleep per how many hours they were in bed. I found that all but two users received scores of 88% or higher average sleep. I cant say for certain that that sleep would have any correlation on fitness levels based on this data.
+
+*put a table of the avg hrs of sleep per month for the 24 fitbit users.
+![heart rate avg for the month](sleep_avg_percent.png)
+
+## Table to analyze: weightLogInfo_v3, weightLogInfo_BMIhealthy_v4, weightLogInfo_BMIunhealthy_v5
+
+Upon further analysis of the healthy BMI data I only have 3 fitbit user Id's and two of those users only have two recorded BMI values for the whole month. The other fitbit user had 30 BMI entries for the month's worth of data. The limited data shows that fitbit users are not providing this information either because they are not interested to track or are not aware of it's availability. This is definitely not a trend in support for using wearable technology in medica/healthcare scenarios. However, as a metric for measuring health over time tracking your BMI would be valid. The only thing though is how is fitbit tracking your BMI? is it taking all the necessary data in order to calculate your BMI automatically? probably not, these measurements of BMI like weight, height, etc would have to manually input to calculate. This is probably why we got so few entries of all the participants. Of the 33 participants only 8 (1/4) manually input their BMI and of those 8 only 2 (1/4) input any BMI regularly during the month of data tracking. 
+
+*put table/data viz for weight log info. Data does not warrant adding a data viz due to lack of it.
+
+
+## Table to analyze: dailyCalories_merged
+
+The calories table has a good representation in that all 33 participants have data entered and the number of entries for the month are at a high percentage for most users. However, using caloric intake on its own to measure health I believe is not a good predictor. The caloric intake for a person to maintain a caloric balance suffiecient for their needs varies on many other factors such as age, gender, activity, height, weight, muscle mass and other variables. The age of a participant can have a great impact on calories burned. The younger you are the higher your metabolic rate is and as you grow older the metabolic rate decreases. Height, weight, muscle mass are also other variables that can effect how many calories you burn as the taller, more weight, and higher muscle all burn more calories. Gender is also a factor as being a male burns more calories. Our data does not provide height, muscle mass, and gender and so reliably calculating if the amount of calories they entered is appropriate for either healthy weight maintenance or weight loss is not possible.  
+
+*put table/data viz for caloric log info. Caloric intake data viz is not being used in our recommendations of analysis.
+
+The only measurements of health that is automated without too much effort from the participant is tracking activity in terms of steps and their heart rate. The other measure of sleep I was not able to discern if they were getting good sleep based off of amount of time slept and/or percent of time slept relative to hours in bed. I thought average percentage time slept per night relative to hours in bed would be a good measure however of the 33 participants more than 90% averaged percentile scores above 90% which means that regardless of exercise they are all sleeping great or the data for sleep patterns is somewhat misleading. 
+
+
+

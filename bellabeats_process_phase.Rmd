@@ -1,0 +1,339 @@
+---
+title: "bellabeats_process_phase"
+author: "Joel Torres"
+date: "2023-02-23"
+output: html_document
+---
+
+```{r setup, include=FALSE}
+knitr::opts_chunk$set(echo = TRUE)
+```
+
+## R Markdown
+
+This is an R Markdown document. Markdown is a simple formatting syntax for authoring HTML, PDF, and MS Word documents. For more details on using R Markdown see <http://rmarkdown.rstudio.com>.
+
+When you click the **Knit** button a document will be generated that includes both content as well as the output of any embedded R code chunks within the document. You can embed an R code chunk like this:
+
+```{r cars}
+summary(cars)
+```
+
+## Including Plots
+
+You can also embed plots, for example:
+
+```{r pressure, echo=FALSE}
+plot(pressure)
+```
+
+Note that the `echo = FALSE` parameter was added to the code chunk to prevent printing of the R code that generated the plot.
+
+<h1>Process phase</h1>
+<h2>Priority: Clean data</h2>
+
+1. Download the dataset.
+  Downloaded the dataset onto local hard drive and google cloud storage.
+2. Unzip the files.
+  Unzipped and extracted files.
+3. Create a folder on your desktop or Drive to house the files. Use appropriate file-naming conventions. If you need a
+refresher on file-naming conventions, you can revisit the “All about file naming” video or the “Organization
+guidelines” reading.
+  I have folders both locally and on google Drive cloud. Having it one the cloud works well because I work on two different computers. I'll save on the cloud from work and then pull current files on home computer from the cloud to stay on track. I should probably be doing this on Github repo.
+4. Upload the data to a tool of your choice. For a refresher on some different ways to do this, feel free to reference any of
+the following resources on how to get started in the following tools:
+  I am using both BigQuery and RStudio. I decided to create a separate folder to house only the csv files that I will be working with which is currently 4 that I have identified. The interface that I am using is RStudio for folder and file creation. To duplicate that csv file and then upload to BigQuery where I'll eventually analyze the tables I had to manipulate the data files using R programming. I converted the csv file to a data frame by reading it into the R console. The file.path() is also documented for clarity.
+  
+```{r}
+fitbit_folder <- file.path("C:", "Users", "joel.torres", "Documents", "Rstudio")
+```
+
+  
+```{r}
+heartrate_sec_df <- read_csv(file.path(fitbit_folder, "heartrate_seconds_merged.csv"))
+```
+  
+  Once the dataframe was created I noticed in RStudio that it's date values were in long date format with hours, minutes, and seconds as follows "%m/%d/%Y %H:%M:%S". The original csv file has the this long date format of course. Note: BigQuery will not accept this date format to upload. I could manipulate the data in excel by changing the date column to a short date "yyyy/mm/dd" format however I wanted to stick with working in RStudio and using R programming. In order to do so I used the as.Date() function as follows. The function takes two parameters one the dataframe and selection of the column name. The second parameter is the current format of the date. 
+  
+```{r}
+heartrate_sec_vector <- as.Date(heartrate_sec_df$Time, "%m/%d/%Y %H:%M:%S")
+```
+
+This results in a vector of dates in "YYYY/MM/DD" format by default for me to use in conjunction with the replace() function. As shown below
+```{r}
+heartrate_sec_bb_df <- replace(heartrate_sec_df, 2, heartrate_sec_vector)
+```
+
+This produces a new data frame. We replace the second column date values with the vector date values on that existing data frame. We then assign this to a new dataframe name. We are ready to create a new csv file with the appropriate data types that BigQuery can accept for upload.
+
+```{r}
+write.csv(heartrate_sec_bb_df, file.path(fitbit_bb_folder, "heartrate_sec_bb.csv"), row.names = FALSE)
+```
+
+This will create a new csv file in desired folder with the name you desire. It's important to note as well that the third parameter row.names = FALSE is needed otherwise you'll get a file with a prepended id column that you will not need.
+
+And voila you are now ready to log into BigQuery and upload your datasets. 
+
+Key takeaways:
+<li>At this point I performed some data transformation/manipulation</li>
+<li>I manipulated the date columns values</li>
+
+<h1>SQL Cleaning</h1>
+<li>remove duplicates</li>
+Including DISTINCT in your SELECT statement removes duplicates
+
+However, For my data I want to know which grouping of Id and SleepDay occur more than once. Logically each participant Id should not have duplicate dates that they slept on. For this I queried the table as below
+
+```{sql connection=}
+SELECT
+   Id, SleepDay, COUNT(*) AS CountOf
+FROM `bellabeats-v001.fitbit_users.sleepDay`
+GROUP BY Id, SleepDay
+HAVING COUNT(*) > 1
+```
+
+I also want a table of non duplicates so I run 
+```{sql connection=}
+SELECT
+  DISTINCT Id,SleepDay,TotalSleepRecords,TotalMinutesAsleep,  TotalTimeInBed
+FROM `bellabeats-v001.fitbit_users.sleepDay`
+```
+
+<li>Clean string variables</li>
+
+Here is a 8-step data cleaning process that will help you prepare your data:
+https://acho.io/blogs/the-ultimate-guide-to-data-cleaning-in-sql
+
+
+    *Remove irrelevant data
+      > SELECT * FROM customers WHERE country = 'US';
+      
+      I created new tables without certain columns data that wasn't needed. And also used where            clause to filter certain bmi values.
+      
+      The sql function below filters for healthy bmi values
+```{sql connection=}
+SELECT  *
+FROM `bellabeats-v001.fitbit_users.weighLogInfo_v3`
+WHERE BMI_Rounded BETWEEN 18.5 AND 24.9
+LIMIT 1000
+```
+ 
+    The sql function below filters for un-healthy bmi values
+```
+```{sql connection=}
+SELECT * 
+FROM `bellabeats-v001.fitbit_users.weighLogInfo_v3`
+WHERE BMI_Rounded NOT BETWEEN 18.5 AND 24.9 
+LIMIT 1000
+```
+
+      
+      
+    *Remove duplicate data
+    
+    Returns unique values
+    
+```{sql connection=}
+SELECT  DISTINCT *
+FROM `bellabeats-v001.fitbit_users.sleepDay` 
+LIMIT 1000
+```
+   
+   Returns the duplicated values
+```{sql connection=}
+SELECT Id, SleepDay, COUNT(*) AS Count_of
+FROM `bellabeats-v001.fitbit_users.sleepDay` 
+GROUP BY SleepDay, Id
+HAVING COUNT(*) > 1
+LIMIT 1000
+```
+    
+    
+    *Fix structural errors
+    *Do type conversion
+    *Handle missing data
+    
+```{sql connection=}
+SELECT *
+FROM `bellabeats-v001.fitbit_users.heartrate_avg_pDay` 
+WHERE coalesce(Id, avg_heart_rate, CountOf_values) IS NULL
+LIMIT 1000
+```
+    Result: No data to display. I have no null values. Checked all current datasets for null values and none were found.
+    
+    *Deal with outliers
+    As of now I believe all data points will be needed. If I need to remove an outlier I will do so as needed further down my analysis. Note: Learn more about IQR (Interquartile range)
+    
+    *Standardize/Normalize data
+    Standardized data to two decimal places in all tables.
+    
+    *Validate data
+    Do you have enough data? 
+    As of now I do. I do think as I start to make my analysis I'll find that I need more data. As of now I believe I'll eventually look for data about users of health tech wearables and medical appointment correlation. But first I need to make a case that fitbit users should use existing data and revelations about their health enough so that it warrants making a medical appointment. 
+    
+    Does the data follow the constraints for its field?
+    I do not know what this means right now.
+    
+    Does your clean data prove or disprove your theory before analysis? Does the data make sense?
+    What is my theory? I've kind of lost track of it. I first want to make a case with current fitbit data that fitbit users can track their data and make a case to seek medical attention for chronic heath concerns. And if I can get data that finds medical appointments are increasing from fitbit or wearable health tech users. Than I can hopefully make that correlation of how many of these fitbit users might seek medical attention.
+    
+    how fit are the fitbit users? or how unfit? if they are very unfit can we make a case for the unfit to make a medical appointment as a preventative measure for other health concerns. 
+    
+    Does current fitbit data reveal health concerns? if so,
+    
+    Does any of the data recorded from the user make it self valuable to a medical practioner?
+    
+    ***Analyze fitbit users level of fitness
+       ****Look at each table individually and analyze to gather fitness levels. Then write a summary on this. and then visualize this. Maybe look at tutorial on how to summarize/analyze another data set especially via visualization.
+    ***measure more importantly those who are the least fit and possibly considered unfit. 
+    ***What is unfit -> possibly meaning below the standard mean for a fit individual standard.
+    ***Do any of the measures provided by the fitbit data if considered "unfit" justify a cause for alert in the users health or chronic health            considerations.
+    ***Can medical professionals use this fitbit tracking data.
+    ***Do the unfit users merit medical/healthcare intervention and or guidance.
+    
+    Hypothesis: Are fitbit users more likely to make medical appointments based on their fitbit device tracking.
+    
+    <h1>R steps to cleaning data</h1>
+    <h2>R Prepare phase before cleaning</h2>
+    *Familiarize yourself with the data set
+    Know file size and data types.
+    Avoid file being to big for local RStudio. To determine file size before reading in use.
+    
+    str(minuteSleep_bb_df) - structure.
+    skim_without_charts(minuteSleep_bb_df) - summarizes data. It'll also find missing values which is convenient and faster than using SQL. 
+    
+    The summarizing/getting to know data is done. Sorting and Filtering done.
+    
+    
+    *Check for structural errors
+    In the code below I looked over data frames and decided I needed to rename column names to have the data make better sense.
+    
+    a) Mislabeled variables
+```{r}
+sleepDay_bb_r_df <- sleepDay_bb_df %>%  
++ rename(SleepDate=SleepDay)
+```
+    
+```{r}
+ heartrate_sec_bb_df_renameCol <- heartrate_sec_bb_df %>% 
++ rename(Date=Time, Heartrate_val=Value)
+```
+    b) Faulty data types
+    When I created this dataframe I noticed the Date variable type was a character.
+```{r}
+weightLogInfo_bb_df <- read_csv(file.path(Rstudio_filepath, "bellabeats", "bellabeats_r_cleaned", "weightLogInfo_bb_df.csv"))
+```
+    I then created a vector variable to store the date object type. Because the Date format is in mm/dd/yyyy we need to include the second argument of format="%m/%d/%Y"
+```{r}
+weightLogInfo_date_vector <- as.Date(weightLogInfo_bb_df$Date, format="%m/%d/%Y")
+```
+   I will now replace the characer data type with the date vector having the date object.
+```{r}
+weightLogInfo_bb_df <- replace(weightLogInfo_bb_df, 2, weightLogInfo_date_vector)
+```
+   Side note: When using typeof() to check data type of a date variable you will get back a dbl data type
+```{r}
+typeof(as.Date("09/12/16", "%m/%d/%y"))
+ "double"
+```
+ but when running class() on a date the result is Date
+```{r}
+class(as.Date("09/12/16", "%m/%d/%y"))
+ "Date"
+```
+
+      c) Non-unique ID numbers 
+      remove duplicates of the Id and SleepDate grouping. Meaning no Id should have a duplicate date, why? because each user should only have one sleep date occurence. I will use the distinct() function from the dplyr package.
+```{r}
+sleepDay_bb_r_df <- sleepDay_bb_r_df %>% distinct(Id, SleepDate, .keep_all = TRUE)
+```
+    
+      d) String inconsistencies:
+      
+Structural changes to column names that make sense, mislabeled variable, lowercase
+
+heartrate_sec_bbr_df <- rename(heartrate_val = Heartrate_sec_value) 
+- change column names
+
+heartrate_sec_bbr_df <- rename_with(heartrate_sec_bb_df_renameCol, tolower)
+- all columns change to lower case
+
+heartrate_sec_bbr_df <- clean_names(heartrate_sec_bbR_df)
+-all columns to lowercase and snake_case where space was
+    *Check for data irregularities
+    
+    a) invalid values
+      I did not notice any invalid values in my data sets.
+    
+    b) outliers
+      I might have some outliers in my heart rate values that I might exclude later on in my analysis for certain cases but they also do need to be accounted for.
+    
+    *Decide how to deal with missing values
+    
+    Will show how many values in dataset are null
+```{r}
+sum(is.na(weightLogInfo_bb_df))
+```
+    
+    How many null values in the column exist
+```{r}
+ sum(is.na(weightLogInfo_bb_df$Fat))
+```
+    
+    summary() function can also break down each column and give number of null          values.
+```{r}
+ summary(weightLogInfo_bb_df)
+```
+    
+ In this dataset only weightLogInfo_bb_df has na values for fat column. There are so many na values the majority. 65/67 are na values for fat column. Which renders this column of observations rather useless. I will remove the variable all together. I could make use of the other variables like weight and bmi to analyze physical body mass.
+ 
+  a) Remove variable
+```{r}
+weightLog_bbr_df <- subset(weightLogInfo_bb_df, select = -c(Fat, IsManualReport, LogId))
+```
+  Returns only the wanted column variables.
+  
+    
+    *Document data versions and changes made
+    I'm using R Markdown.
+    
+    *Transformation of data to work effectively with it
+    Add Column After Specific Column. create a vector separately and assign it to a variable.
+```{r}
+hrs_asleep <- c(round(sleepday_bbr_df$totalminutesasleep/60, digits = 2))
+```
+    - mutate() function
+```{r}
+sleepday_bbr_df <- sleepday_bbr_df %>% 
++ mutate(hrs_asleep=hrs_asleep, .after=totalminutesasleep)
+```
+    and I did the same for another column named sleeptime_percent
+```{r}
+sleeptime_percent <- c(round(sleepday_bbr_df$hrs_asleep/sleepday_bbr_df$hrs_inbed, digits = 2))
+
+sleepday_bbr_df <- sleepday_bbr_df %>% 
++ mutate(sleeptime_percent=sleeptime_percent, .after=hrs_inbed)
+```
+    To get the mean (avg) for a variable based on a group of two other variables. I also had to round the mean.
+```{r}
+heart_rate_avg_pday_df <- heartrate_sec_bbr_df %>% 
++ group_by(id, date) %>% 
++ summarise(heart_rate_avg=round(mean(heartrate_val), digits = 2))
+```
+    The weightlog_bbr_df dataset/dataframe had three columns where I wanted to reduce the decimals place point to the hundreths place. I used the mutate_at function where I can select the variables that need to be changed and all else stays the same. But before so, I created a function that would take a value and round to the desired decimals place.
+```{r}
+round_2decimals <- function(x, na.rm=FALSE) (round(x, digits = 2))
+```
+    After creating the function and saving to 'round_2decimals' I then used the mutate_at function.
+```{r}
+weightlog_bbr_df <- weightlog_bbr_df %>% mutate_at(c("weightkg", "weightpounds","bmi"), round_2decimals, na.rm = TRUE)
+```
+    Next, I wanted to filter for a dataset of fitbit users whose bmi was in the healthy range between 18.5 - 24.9. To do so I'll be using the filter() function associated with the dplyr package.
+```{r}
+weightlog_bbr_healthybmi <- weightlog_bbr_df %>% filter(bmi >= 18.5 & bmi <= 24.9)
+```
+  I also created another dataset for un-healthy bmi ranges that are less than 18.5 & greater than 24.9  
+```{r}
+weightlog_bbr_unhealthybmi <- weightlog_bbr_df %>% filter(bmi <= 18.5 | bmi >= 24.9)
+```
+    
